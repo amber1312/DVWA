@@ -16,6 +16,7 @@ jobs:
       - name: Build and start DVWA
         run: |
           docker compose build
+          docker compose pull db
           docker compose up -d --pull never
 
       - name: Wait for app
