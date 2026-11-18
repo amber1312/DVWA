@@ -1,0 +1,51 @@
+name: ZAP
+on: workflow_dispatch
+
+jobs:
+  zap:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner info
+        run: |
+          grep -m1 "model name" /proc/cpuinfo
+          nproc
+          free -m | head -2
+
+      - name: Build and start DVWA
+        run: |
+          docker compose build
+          docker compose up -d --pull never
+
+      - name: Wait for app
+        run: |
+          for i in $(seq 1 60); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4280/login.php || true)
+            echo "http=$CODE"
+            if [ "$CODE" = "200" ] || [ "$CODE" = "302" ]; then exit 0; fi
+            sleep 5
+          done
+          echo "app did not start"; exit 1
+
+      - name: Create DVWA database
+        run: |
+          curl -s -c jar.txt http://localhost:4280/setup.php -o setup.html
+          T=$(grep -oP "name='user_token' value='\K[^']+" setup.html)
+          curl -s -b jar.txt -c jar.txt -d "create_db=Create+%2F+Reset+Database&user_token=$T" http://localhost:4280/setup.php -o /dev/null
+          curl -s -o /dev/null -w 'login page: %{http_code}\n' http://localhost:4280/login.php
+
+      - name: ZAP baseline scan
+        run: |
+          mkdir zap-out && chmod 777 zap-out
+          docker run --rm --network host -v "$PWD/zap-out:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy@sha256:030d3df57735dacbb83464854758e674dd9ad01d79d12a129a8e58b1fd384238 \
+            zap-baseline.py -t http://localhost:4280 -J zap-report.json -I
+
+      - name: Verify scan output
+        run: test -s zap-out/zap-report.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zap-result
+          path: zap-out/zap-report.json
